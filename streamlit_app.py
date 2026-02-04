@@ -1,18 +1,21 @@
 # Google SERP Keyword Extractor (Selenium + Streamlit)
 # ---------------------------------------------------
-# Updated with filtering for PAA and user-provided XPath for PASF
 
 import streamlit as st
 import pandas as pd
 import time
+import random
 from urllib.parse import quote_plus
 
+# ──── Selenium imports ────────────────────────────────────────────────
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service               # ← THIS WAS MISSING
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ---------------------------------------------------
@@ -34,6 +37,7 @@ def init_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--window-size=1920,1080")
 
+    # This line now works because we imported Service
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
         options=options
@@ -54,7 +58,7 @@ def build_google_url(keyword, country, num):
 
 
 # ---------------------------------------------------
-# EXTRACTION (Updated with filtering and XPath)
+# EXTRACTION (with filtering for cleaner results)
 # ---------------------------------------------------
 def extract_paa(driver, limit):
     questions = []
@@ -62,7 +66,7 @@ def extract_paa(driver, limit):
         spans = driver.find_elements(By.CSS_SELECTOR, ".related-question-pair span")
         for s in spans:
             text = s.text.strip()
-            # Filter for plausible questions: length > 15 chars and contains '?' or sentence-like
+            # Filter out junk (icons, arrows, short text)
             if len(text) > 15 and ('?' in text or len(text.split()) > 5) and text not in questions:
                 questions.append(text)
             if len(questions) >= limit:
@@ -74,21 +78,15 @@ def extract_paa(driver, limit):
 
 def extract_pasp(driver, limit):
     results = []
-    # Use the user-provided XPath for PASF container
-    pasp_xpath = "/html/body/div[3]/div/div[12]/div/div[3]/div/div[3]/div/div/div/div/div[2]/div"
     try:
-        container = driver.find_element(By.XPATH, pasp_xpath)
-        # All spans inside <a> tags within the container
-        spans_in_a = container.find_elements(By.CSS_SELECTOR, "a span")
-        for span in spans_in_a:
-            text = span.text.strip()
+        links = driver.find_elements(By.CSS_SELECTOR, "a.ggLgoc")
+        for a in links:
+            text = a.text.strip()
             if text and text not in results:
                 results.append(text)
             if len(results) >= limit:
                 break
-    except TimeoutException:
-        pass
-    except Exception:
+    except:
         pass
     return results
 
@@ -96,8 +94,8 @@ def extract_pasp(driver, limit):
 # ---------------------------------------------------
 # UI
 # ---------------------------------------------------
-st.title("🔍 Google SERP Keyword Extractor (Updated)")
-st.caption("People Also Ask + People Also Search For | Country Accurate | With Filtering and XPath")
+st.title("🔍 Google SERP Keyword Extractor")
+st.caption("People Also Ask + People Also Search For | Country Accurate")
 
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel File",
@@ -105,17 +103,21 @@ uploaded_file = st.file_uploader(
 )
 
 if not uploaded_file:
+    st.info("Please upload a CSV or Excel file to start.")
     st.stop()
 
 # ---------------------------------------------------
 # LOAD FILE
 # ---------------------------------------------------
-if uploaded_file.name.endswith(".csv"):
-    df_input = pd.read_csv(uploaded_file)
-else:
-    df_input = pd.read_excel(uploaded_file)
-
-st.success(f"Loaded {len(df_input)} rows")
+try:
+    if uploaded_file.name.endswith(".csv"):
+        df_input = pd.read_csv(uploaded_file)
+    else:
+        df_input = pd.read_excel(uploaded_file)
+    st.success(f"Loaded {len(df_input)} rows")
+except Exception as e:
+    st.error(f"Error reading file: {e}")
+    st.stop()
 
 # ---------------------------------------------------
 # COLUMN MAPPING
@@ -126,106 +128,94 @@ keyword_col = st.selectbox("Keyword Column", df_input.columns)
 country_col = st.selectbox("Country Column (US, PK, IN, etc.)", df_input.columns)
 
 max_keywords = st.number_input(
-    "Max keywords to extract per row",
+    "Max items per section",
     min_value=3,
     max_value=50,
-    value=10
+    value=12
 )
 
-start = st.button("Start Extraction")
+if st.button("🚀 Start Extraction", type="primary"):
 
-if not start:
-    st.stop()
+    driver = init_driver()
 
-# ---------------------------------------------------
-# PROCESS
-# ---------------------------------------------------
-driver = init_driver()
+    results = []
+    progress = st.progress(0)
+    status = st.empty()
+    live_table = st.empty()
 
-results = []
-progress = st.progress(0)
-status = st.empty()
-live_table = st.empty()  # For live results
+    for i, row in df_input.iterrows():
+        keyword = str(row[keyword_col]).strip()
+        country = str(row[country_col]).strip().upper()
 
-for i, row in df_input.iterrows():
-    keyword = str(row[keyword_col]).strip()
-    country = str(row[country_col]).strip().upper()
+        if not keyword or not country:
+            continue
 
-    if not keyword or not country:
-        continue
+        status.markdown(f"🔍 Processing **{keyword}** ({country})")
 
-    status.write(f"🔍 Processing **{keyword}** ({country})")
+        url = build_google_url(keyword, country, max_keywords)
 
-    url = build_google_url(keyword, country, max_keywords)
+        try:
+            driver.get(url)
 
-    try:
-        driver.get(url)
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
 
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
+            time.sleep(3.0 + random.uniform(0.5, 2.0))  # Allow dynamic content
 
-        time.sleep(3.5 + random.uniform(0.5, 1.5))  # Allow JS to load SERP features
+            paa = extract_paa(driver, max_keywords)
+            pasp = extract_pasp(driver, max_keywords)
 
-        paa = extract_paa(driver, max_keywords)
-        pasp = extract_pasp(driver, max_keywords)
+            results.append({
+                "seed_keyword": keyword,
+                "country": country,
+                "google_url": url,
+                "people_also_ask": ", ".join(paa) if paa else "(not found)",
+                "people_also_search_for": ", ".join(pasp) if pasp else "(not found)"
+            })
 
-        results.append({
-            "seed_keyword": keyword,
-            "country": country,
-            "google_url": url,
-            "people_also_ask": ", ".join(paa),
-            "people_also_search_for": ", ".join(pasp)
-        })
+        except Exception as e:
+            results.append({
+                "seed_keyword": keyword,
+                "country": country,
+                "google_url": url,
+                "people_also_ask": f"(error: {str(e)[:80]})",
+                "people_also_search_for": ""
+            })
 
-    except Exception:
-        results.append({
-            "seed_keyword": keyword,
-            "country": country,
-            "google_url": url,
-            "people_also_ask": "",
-            "people_also_search_for": ""
-        })
+        # Live preview
+        df_live = pd.DataFrame(results)
+        live_table.dataframe(df_live, use_container_width=True)
 
-    # Live update table
-    df_live = pd.DataFrame(results)
-    live_table.dataframe(df_live, use_container_width=True)
+        progress.progress((i + 1) / len(df_input))
 
-    progress.progress((i + 1) / len(df_input))
-    time.sleep(2.5 + random.uniform(0.5, 1.0))  # rate-limit protection
+    driver.quit()
+    progress.empty()
+    status.success("Extraction completed!")
 
-driver.quit()
-progress.empty()
-status.empty()
+    # ---------------------------------------------------
+    # FINAL RESULTS & DOWNLOAD
+    # ---------------------------------------------------
+    st.subheader("✅ Final Results")
+    st.dataframe(df_live, use_container_width=True)
 
-# ---------------------------------------------------
-# RESULTS
-# ---------------------------------------------------
-df_results = pd.DataFrame(results)
-
-st.subheader("✅ Extraction Results")
-st.dataframe(df_results, use_container_width=True)
-
-# ---------------------------------------------------
-# EXPORT
-# ---------------------------------------------------
-csv = df_results.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "⬇️ Download CSV",
-    csv,
-    "serp_keywords.csv",
-    "text/csv"
-)
-
-excel_path = "serp_keywords.xlsx"
-df_results.to_excel(excel_path, index=False)
-
-with open(excel_path, "rb") as f:
+    csv = df_live.to_csv(index=False).encode("utf-8")
     st.download_button(
-        "⬇️ Download Excel",
-        f,
-        "serp_keywords.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "⬇️ Download CSV",
+        csv,
+        "serp_keywords.csv",
+        "text/csv"
     )
 
-st.success("🎯 Extraction completed successfully")
+    # Optional Excel download
+    excel_buffer = pd.ExcelWriter("serp_keywords.xlsx", engine='openpyxl')
+    df_live.to_excel(excel_buffer, index=False)
+    excel_buffer.close()
+
+    with open("serp_keywords.xlsx", "rb") as f:
+        st.download_button(
+            "⬇️ Download Excel",
+            f,
+            "serp_keywords.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
