@@ -1,4 +1,5 @@
-# Google SERP Keyword Extractor + Trends + Advanced Crawling (2026 Cloud-Ready)
+# Google SERP Keyword Extractor – Single Column Layout (2026 Cloud Fix)
+# No tabs, no sidebar – everything in one flow
 
 import streamlit as st
 import pandas as pd
@@ -12,252 +13,211 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from pytrends.request import TrendReq
-from pytrends.exceptions import ResponseError
-
 # ────────────────────────────────────────────────
-# PAGE CONFIG
+# PAGE CONFIG – Wide + clean
 # ────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Google SERP + Trends Insights",
-    page_icon="🔍📈",
+    page_title="Google SERP Extractor",
+    page_icon="🔍",
     layout="wide"
 )
 
-# Custom styling
+# Simple styling
 st.markdown("""
     <style>
     .status-ok  { color: #2ecc71; font-weight: bold; }
     .status-warn { color: #e67e22; font-weight: bold; }
-    .trend-up   { color: #27ae60; }
-    .trend-down { color: #c0392b; }
+    .big-title { font-size: 32px; font-weight: bold; margin-bottom: 8px; }
     </style>
 """, unsafe_allow_html=True)
 
-# ────────────────────────────────────────────────
-# SELENIUM DRIVER (cached)
-# ────────────────────────────────────────────────
-@st.cache_resource
-def get_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) Chrome/128 Safari/537.36")
-    driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(35)
-    return driver
+st.markdown('<div class="big-title">🔍 Google SERP Keyword Extractor</div>', unsafe_allow_html=True)
+st.caption("Extracts People Also Ask + People Also Search For • Single page layout • Lahore-friendly 🇵🇰")
 
 # ────────────────────────────────────────────────
-# GOOGLE URL BUILDER
+# CONTROLS – All at the top, no sidebar
 # ────────────────────────────────────────────────
-def build_google_url(keyword, country_code, num=15):
-    return f"https://www.google.com/search?q={quote_plus(keyword)}&num={num}&gl={country_code.lower()}&hl=en&pws=0"
-
-# ────────────────────────────────────────────────
-# EXTRACT PAA & PASP
-# ────────────────────────────────────────────────
-def extract_paa(driver, limit=12):
-    questions = []
-    try:
-        els = driver.find_elements(By.CSS_SELECTOR, ".related-question-pair span")
-        for el in els:
-            txt = el.text.strip()
-            if txt and txt not in questions:
-                questions.append(txt)
-            if len(questions) >= limit:
-                break
-    except:
-        pass
-    return questions[:limit]
-
-def extract_pasp(driver, limit=10):
-    terms = []
-    try:
-        links = driver.find_elements(By.CSS_SELECTOR, "a.ggLgoc")
-        for a in links:
-            txt = a.text.strip()
-            if txt and txt not in terms:
-                terms.append(txt)
-            if len(terms) >= limit:
-                break
-    except:
-        pass
-    return terms[:limit]
-
-# ────────────────────────────────────────────────
-# SIMPLE GOOGLE TRENDS ANALYSIS (per keyword + country)
-# ────────────────────────────────────────────────
-def get_trends_summary(keyword, country_code):
-    try:
-        pytrends = TrendReq(hl='en-US', tz=300, timeout=(10,25), retries=2, backoff_factor=0.1)
-        pytrends.build_payload([keyword], cat=0, timeframe='today 12-m', geo=country_code.upper())
-        df = pytrends.interest_over_time()
-        
-        if df.empty or keyword not in df.columns:
-            return "No trend data available (possibly low volume or API issue)."
-
-        latest = df[keyword].iloc[-1]
-        avg = df[keyword].mean()
-        trend_direction = "↑ rising" if latest > avg * 1.15 else "↓ declining" if latest < avg * 0.85 else "→ stable"
-        
-        return f"Interest (last 12 months): **{latest}** (avg {int(avg)}) – {trend_direction}"
-    
-    except ResponseError:
-        return "Trends API temporarily unavailable or rate-limited."
-    except Exception as e:
-        return f"Trends error: {str(e)[:80]} (falling back — data may be incomplete)"
-
-# ────────────────────────────────────────────────
-# SIDEBAR CONTROLS
-# ────────────────────────────────────────────────
-with st.sidebar:
-    st.header("⚙️ Settings")
+st.markdown("### ⚙️ Settings")
+col1, col2, col3 = st.columns(3)
+with col1:
     max_paa = st.slider("Max People Also Ask", 4, 20, 10)
+with col2:
     max_pasp = st.slider("Max People Also Search", 4, 15, 8)
-    delay_sec = st.slider("Delay between requests (s)", 2.0, 7.0, 3.5, help="Higher = lower block risk")
-    advanced_crawl = st.checkbox("Do advanced crawling: Open each PAA question in new tab", value=False,
-                                 help="When checked, after extraction, browser will try to open PAA questions for deeper exploration")
+with col3:
+    delay_sec = st.slider("Delay between requests (seconds)", 2.0, 8.0, 4.0, help="Higher = safer from blocks")
+
+advanced_crawl = st.checkbox(
+    "Advanced mode: Open each People Also Ask question in new browser tab (after extraction)",
+    value=False,
+    help="Warning: can open 10–50+ tabs quickly – use only on small files!"
+)
+
+st.markdown("---")
 
 # ────────────────────────────────────────────────
-# MAIN TABS – Now only 2 tabs (combined Results & Tips)
+# FILE UPLOAD & COLUMN SELECTION
 # ────────────────────────────────────────────────
-tab_upload, tab_results = st.tabs(["📤 Upload & Extract", "📊 Results & Insights"])
+st.markdown("### 📤 Upload your file")
+uploaded = st.file_uploader("CSV or Excel file (must have Keyword + Country columns)", type=["csv", "xlsx", "xls"])
 
-with tab_upload:
-    st.subheader("Upload your keywords & country codes")
-    st.caption("CSV/Excel file needed – columns: Keyword | Country (e.g. PK, US, IN)")
+if uploaded:
+    try:
+        df_input = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+        st.success(f"Loaded **{len(df_input)}** rows")
 
-    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"])
+        colA, colB = st.columns(2)
+        with colA:
+            kw_col = st.selectbox("Keyword column", df_input.columns)
+        with colB:
+            country_col = st.selectbox("Country code column (e.g. PK, US, IN)", df_input.columns)
 
-    if uploaded:
+        st.markdown("**Preview (first 5 rows)**")
+        st.dataframe(df_input.head(6), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        st.stop()
+
+st.markdown("---")
+
+# ────────────────────────────────────────────────
+# START BUTTON + PROCESSING
+# ────────────────────────────────────────────────
+if st.button("🚀 Start Extraction", type="primary") and uploaded:
+    with st.spinner("Starting browser & extracting data..."):
+        # Driver setup
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(40)
+
+    results = []
+    progress = st.progress(0)
+    status = st.empty()
+
+    total = len(df_input)
+
+    for i, row in df_input.iterrows():
+        keyword = str(row.get(kw_col, "")).strip()
+        cc = str(row.get(country_col, "")).strip().upper()
+
+        if not keyword or not cc:
+            continue
+
+        status.markdown(f"<span class='status-ok'>Now processing:</span> **{keyword}** ({cc})", unsafe_allow_html=True)
+
+        url = f"https://www.google.com/search?q={quote_plus(keyword)}&num=15&gl={cc.lower()}&hl=en&pws=0"
+
         try:
-            df_input = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-            st.success(f"Loaded **{len(df_input)}** keywords")
+            driver.get(url)
+            WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            time.sleep(random.uniform(1.0, 2.5))  # Let JS load
 
-            col1, col2 = st.columns(2)
-            with col1:
-                kw_col = st.selectbox("Keyword column", df_input.columns)
-            with col2:
-                country_col = st.selectbox("Country code column (PK, US...)", df_input.columns)
+            # Extract PAA
+            paa_list = []
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, ".related-question-pair span")
+                for el in els:
+                    txt = el.text.strip()
+                    if txt and txt not in paa_list:
+                        paa_list.append(txt)
+                    if len(paa_list) >= max_paa:
+                        break
+            except:
+                pass
 
-            st.dataframe(df_input.head(5), use_container_width=True)
+            # Extract PASP
+            pasp_list = []
+            try:
+                links = driver.find_elements(By.CSS_SELECTOR, "a.ggLgoc")
+                for a in links:
+                    txt = a.text.strip()
+                    if txt and txt not in pasp_list:
+                        pasp_list.append(txt)
+                    if len(pasp_list) >= max_pasp:
+                        break
+            except:
+                pass
 
-            if st.button("🚀 Start Extraction + Trends", type="primary"):
-                driver = get_driver()
-                results = []
-                progress = st.progress(0)
-                status = st.empty()
+            row_data = {
+                "Keyword": keyword,
+                "Country": cc,
+                "Google URL": url,
+                "People Also Ask": " • ".join(paa_list),
+                "People Also Search For": " • ".join(pasp_list),
+                "PAA Count": len(paa_list),
+                "PASP Count": len(pasp_list),
+                "Note": ""
+            }
 
-                total = len(df_input)
+            # Advanced crawling
+            if advanced_crawl and paa_list:
+                for q in paa_list[:4]:  # limit to 4 to avoid too many tabs
+                    q_url = f"https://www.google.com/search?q={quote_plus(q)}&gl={cc.lower()}"
+                    driver.execute_script(f"window.open('{q_url}', '_blank');")
+                    time.sleep(0.7)
 
-                for i, row in df_input.iterrows():
-                    keyword = str(row[kw_col]).strip()
-                    cc = str(row[country_col]).strip().upper()
-
-                    if not keyword or not cc:
-                        continue
-
-                    status.markdown(f"<span class='status-ok'>Processing →</span> **{keyword}** ({cc})", unsafe_allow_html=True)
-
-                    url = build_google_url(keyword, cc)
-
-                    try:
-                        driver.get(url)
-                        WebDriverWait(driver, 18).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                        time.sleep(random.uniform(0.9, 2.2))
-
-                        paa = extract_paa(driver, max_paa)
-                        pasp = extract_pasp(driver, max_pasp)
-
-                        trends_info = get_trends_summary(keyword, cc)
-
-                        row_data = {
-                            "Keyword": keyword,
-                            "Country": cc,
-                            "Google URL": url,
-                            "People Also Ask": " • ".join(paa),
-                            "People Also Search": " • ".join(pasp),
-                            "PAA Count": len(paa),
-                            "PASP Count": len(pasp),
-                            "Google Trends (12m)": trends_info
-                        }
-                        results.append(row_data)
-
-                        # Advanced crawling – open PAA questions
-                        if advanced_crawl and paa:
-                            for q in paa[:5]:  # limit to first 5 to avoid tab explosion
-                                q_url = f"https://www.google.com/search?q={quote_plus(q)}&gl={cc.lower()}"
-                                script = f"window.open('{q_url}', '_blank');"
-                                driver.execute_script(script)
-                                time.sleep(0.6)
-
-                    except Exception as e:
-                        results.append({
-                            "Keyword": keyword,
-                            "Country": cc,
-                            "Google URL": url,
-                            "People Also Ask": "",
-                            "People Also Search": "",
-                            "PAA Count": 0,
-                            "PASP Count": 0,
-                            "Google Trends (12m)": f"Error: {str(e)[:60]}"
-                        })
-
-                    progress.progress((i + 1) / total)
-                    time.sleep(delay_sec + random.uniform(-0.8, 1.4))
-
-                driver.quit()
-                progress.empty()
-                status.empty()
-
-                st.session_state["results"] = pd.DataFrame(results)
-                st.success("Extraction + Trends analysis completed! → Check Results & Insights tab")
-                st.balloons()
+            results.append(row_data)
 
         except Exception as e:
-            st.error(f"File error: {e}")
+            results.append({
+                "Keyword": keyword,
+                "Country": cc,
+                "Google URL": url,
+                "People Also Ask": "",
+                "People Also Search For": "",
+                "PAA Count": 0,
+                "PASP Count": 0,
+                "Note": f"Error: {str(e)[:80]}"
+            })
 
-with tab_results:
-    if "results" in st.session_state and not st.session_state["results"].empty:
-        df = st.session_state["results"]
+        progress.progress((i + 1) / total)
+        time.sleep(delay_sec + random.uniform(-0.6, 1.2))
 
-        st.subheader("Extraction Results + Google Trends Insights")
+    driver.quit()
+    progress.empty()
+    status.empty()
 
-        colA, colB, colC = st.columns(3)
-        colA.metric("Processed Keywords", len(df))
-        colB.metric("Avg PAA found", f"{df['PAA Count'].mean():.1f}")
-        colC.metric("Avg PASP found", f"{df['PASP Count'].mean():.1f}")
+    df_results = pd.DataFrame(results)
 
-        with st.expander("Full Data Table", expanded=True):
-            st.dataframe(
-                df,
-                column_config={
-                    "Google URL": st.column_config.LinkColumn("Google Search"),
-                    "People Also Ask": st.column_config.TextColumn(width="large"),
-                    "People Also Search": st.column_config.TextColumn(width="large"),
-                    "Google Trends (12m)": st.column_config.TextColumn(width="medium")
-                },
-                use_container_width=True,
-                hide_index=True
-            )
+    st.success(f"Extraction finished! Processed {len(df_results)} keywords.")
 
-        st.download_button("Download CSV", df.to_csv(index=False), "serp_trends_results.csv", "text/csv")
+    # ── RESULTS DISPLAY ──
+    st.markdown("### 📊 Results")
+    st.dataframe(
+        df_results,
+        column_config={
+            "Google URL": st.column_config.LinkColumn("Open Search"),
+            "People Also Ask": st.column_config.TextColumn(width="large"),
+            "People Also Search For": st.column_config.TextColumn(width="large"),
+        },
+        use_container_width=True,
+        hide_index=True
+    )
 
-        st.markdown("---")
-        st.subheader("Quick Tips & Best Practices")
-        st.markdown("""
-        - Use **3–6 sec delay** for >50 keywords to reduce CAPTCHA risk  
-        - Enable **advanced crawling** only for small batches (opens many tabs!)  
-        - Trends data uses unofficial pytrends → may fail occasionally (Google changes backend)  
-        - For production / heavy use consider paid APIs (SerpApi, DataForSEO, Glimpse, etc.)  
-        - Combine PAA questions with trends direction to find rising long-tail opportunities  
-        - Run from Pakistan (PK)? Trends are very accurate for local language + English mix
-        """)
+    st.download_button(
+        "⬇️ Download CSV",
+        df_results.to_csv(index=False),
+        "serp_results.csv",
+        "text/csv"
+    )
 
-        st.caption("Tool built for educational & research use • Respect Google's ToS • 2026 edition")
+    st.markdown("---")
 
-    else:
-        st.info("Run extraction from the first tab to see results and insights here.")
+    # ── TIPS SECTION (now inline) ──
+    st.markdown("### 💡 Quick Tips")
+    st.markdown("""
+    - Use **4–6 second delay** for >30 keywords to avoid blocks/CAPTCHA  
+    - **Advanced mode** opens new tabs – only enable for small tests (5–15 rows max)  
+    - Google sometimes changes CSS selectors → PAA/PASP might miss occasionally  
+    - For Pakistan (PK), results are usually very accurate for local + English searches  
+    - **Google Trends disabled** due to library compatibility issue on Streamlit Cloud (urllib3 conflict)  
+      → You can fix locally with `pip install urllib3<2` but it may break other packages
+    """)
+
+else:
+    if not uploaded:
+        st.info("Please upload your CSV/Excel file to begin.")
