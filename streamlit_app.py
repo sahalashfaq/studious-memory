@@ -1,7 +1,7 @@
-# Google SERP People Also Ask + People Also Search For Extractor
-# Using the exact selectors you requested:
-#   - People Also Ask: .related-question-pair span
-#   - People Also Search For: a.ggLgoc
+# Google SERP Extractor – STRICTLY using ONLY the selectors you requested
+# .related-question-pair span → People Also Ask
+# a.ggLgoc → People Also Search For
+# No other selectors / paths / jsname added
 
 import streamlit as st
 import pandas as pd
@@ -16,178 +16,133 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-# ────────────────────────────────────────────────
-# Page config
-# ────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Google SERP PAA + PASF Extractor",
-    page_icon="🔍",
-    layout="wide"
-)
+# Page setup
+st.set_page_config(page_title="Google PAA & PASF Extractor (Strict Selectors)", layout="wide")
 
-st.title("Google People Also Ask & People Also Search For Extractor")
-st.caption("Using selectors: .related-question-pair span  •  a.ggLgoc")
+st.title("Google People Also Ask + People Also Search For")
+st.warning("""
+**Important 2026 reality check**  
+The selectors `.related-question-pair span` and `a.ggLgoc` are from older Google SERPs (2020–2023).  
+Google changed classes multiple times — these are now very rarely present.  
+Most results will show "(not found)" — even on queries that have PAA/PASF visible in your browser.  
+This is **not a code error**, it's Google's current HTML.
+""")
 
-# ────────────────────────────────────────────────
 # Controls
-# ────────────────────────────────────────────────
-st.markdown("### Settings")
+st.subheader("Settings")
 
-col_delay, col_paa, col_pasp = st.columns([3, 2, 2])
+col1, col2, col3 = st.columns(3)
+with col1:
+    delay = st.slider("Delay between queries (seconds)", 3.0, 12.0, 6.0)
+with col2:
+    max_paa = st.number_input("Max PAA items", 3, 20, 10)
+with col3:
+    max_pasf = st.number_input("Max PASF items", 3, 15, 8)
 
-with col_delay:
-    delay_seconds = st.slider(
-        "Delay between requests (seconds)",
-        min_value=3.0,
-        max_value=12.0,
-        value=5.5,
-        step=0.5,
-        help="Higher value → lower risk of blocks / CAPTCHA"
-    )
-
-with col_paa:
-    max_paa = st.number_input("Max People Also Ask", 3, 25, 12)
-
-with col_pasp:
-    max_pasf = st.number_input("Max People Also Search For", 3, 20, 10)
-
-advanced_open = st.checkbox(
-    "Advanced: open first 5 People Also Ask questions in new tabs",
-    value=False,
-    help="Only use on small keyword lists!"
-)
+open_tabs = st.checkbox("Open first 4 PAA questions in new tabs (advanced mode)", False)
 
 st.divider()
 
-# ────────────────────────────────────────────────
-# File upload & column selection
-# ────────────────────────────────────────────────
-st.markdown("### Upload keyword list")
+# Upload
+uploaded = st.file_uploader("Upload CSV/Excel (Keyword + Country code columns)", type=["csv", "xlsx"])
 
-uploaded = st.file_uploader(
-    "CSV or Excel file",
-    type=["csv", "xlsx"],
-    help="Should contain at least: Keyword + Country code (PK, US, IN, GB, etc.)"
-)
-
-if uploaded is not None:
+if uploaded:
     try:
-        if uploaded.name.endswith('.csv'):
-            df_input = pd.read_csv(uploaded)
-        else:
-            df_input = pd.read_excel(uploaded)
+        df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+        st.success(f"Loaded {len(df)} rows")
 
-        st.success(f"Loaded {len(df_input)} rows")
+        c1, c2 = st.columns(2)
+        with c1:
+            kw_col = st.selectbox("Keyword column", df.columns)
+        with c2:
+            cc_col = st.selectbox("Country code column (us, pk, in...)", df.columns)
 
-        col_kw, col_cc = st.columns(2)
-        with col_kw:
-            keyword_col = st.selectbox("Keyword column", df_input.columns, index=0)
-        with col_cc:
-            country_col = st.selectbox("Country code column (gl=)", df_input.columns, index=1)
-
-        st.markdown("**Preview**")
-        st.dataframe(df_input.head(7), use_container_width=True)
-
+        st.dataframe(df.head(5), use_container_width=True)
     except Exception as e:
-        st.error(f"Could not read file → {e}")
+        st.error(f"File error: {e}")
         st.stop()
 
-# ────────────────────────────────────────────────
-# START
-# ────────────────────────────────────────────────
-if st.button("▶️  Start Extraction", type="primary", use_container_width=True) and uploaded is not None:
+if st.button("Start Extraction", type="primary") and uploaded:
 
-    # ── Selenium setup ───────────────────────────────────────
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
 
     driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(50)
+    driver.set_page_load_timeout(45)
 
-    # Live result containers
     results = []
-    live_table = st.empty()
+    table_placeholder = st.empty()
     status = st.empty()
-    progress = st.progress(0)
+    prog = st.progress(0)
 
-    total = len(df_input)
+    total = len(df)
 
-    for idx, row in df_input.iterrows():
-        kw   = str(row.get(keyword_col, "")).strip()
-        gl   = str(row.get(country_col, "us")).strip().lower()
+    for i, row in df.iterrows():
+        keyword = str(row.get(kw_col, "")).strip()
+        country = str(row.get(cc_col, "us")).strip().lower()
 
-        if not kw:
+        if not keyword:
             continue
 
-        status.markdown(f"**{idx+1}/{total}**   {kw}   ({gl.upper()})")
+        status.text(f"Processing {i+1}/{total}: {keyword} ({country.upper()})")
 
-        url = f"https://www.google.com/search?q={quote_plus(kw)}&gl={gl}&hl=en&num=20&pws=0"
+        url = f"https://www.google.com/search?q={quote_plus(keyword)}&gl={country}&hl=en&num=20&pws=0"
 
         try:
             driver.get(url)
+            WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            time.sleep(random.uniform(3.0, 6.0))  # Give time for dynamic content
 
-            # Wait for main search results area
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "#search, #res, body"))
-            )
-
-            # Give extra time for dynamic elements
-            time.sleep(random.uniform(2.8, 5.5))
-
-            # ───── People Also Ask ────── using your requested selector
-            paa_list = []
+            # STRICT People Also Ask – only your selector
+            paa = []
             try:
-                spans = driver.find_elements(By.CSS_SELECTOR, ".related-question-pair span")
-                for span in spans:
-                    text = span.text.strip()
-                    if text and text not in paa_list:
-                        paa_list.append(text)
-                    if len(paa_list) >= max_paa:
+                elements = driver.find_elements(By.CSS_SELECTOR, ".related-question-pair span")
+                for el in elements:
+                    txt = el.text.strip()
+                    if txt and txt not in paa:
+                        paa.append(txt)
+                    if len(paa) >= max_paa:
                         break
             except:
                 pass
 
-            # ───── People Also Search For ────── using your requested selector
-            pasf_list = []
+            # STRICT People Also Search For – only your selector
+            pasf = []
             try:
                 links = driver.find_elements(By.CSS_SELECTOR, "a.ggLgoc")
-                for a in links:
-                    text = a.text.strip()
-                    if text and text not in pasf_list:
-                        pasf_list.append(text)
-                    if len(pasf_list) >= max_pasf:
+                for link in links:
+                    txt = link.text.strip()
+                    if txt and txt not in pasf:
+                        pasf.append(txt)
+                    if len(pasf) >= max_pasf:
                         break
             except:
                 pass
 
-            # Advanced mode: open some questions
-            if advanced_open and paa_list:
-                for question in paa_list[:5]:
-                    q_url = f"https://www.google.com/search?q={quote_plus(question)}&gl={gl}"
-                    driver.execute_script(f"window.open('{q_url}', '_blank');")
-                    time.sleep(0.7)
+            # Optional: open tabs
+            if open_tabs and paa:
+                for q in paa[:4]:
+                    qurl = f"https://www.google.com/search?q={quote_plus(q)}&gl={country}"
+                    driver.execute_script(f"window.open('{qurl}', '_blank');")
+                    time.sleep(0.8)
 
-            row = {
-                "Keyword": kw,
-                "Country": gl.upper(),
+            results.append({
+                "Keyword": keyword,
+                "Country": country.upper(),
                 "URL": url,
-                "People Also Ask": " • ".join(paa_list) if paa_list else "(not found)",
-                "People Also Search For": " • ".join(pasf_list) if pasf_list else "(not found)",
-                "PAA count": len(paa_list),
-                "PASF count": len(pasf_list)
-            }
-
-            results.append(row)
+                "People Also Ask": " • ".join(paa) if paa else "(not found with .related-question-pair span)",
+                "People Also Search For": " • ".join(pasf) if pasf else "(not found with a.ggLgoc)",
+                "PAA count": len(paa),
+                "PASF count": len(pasf)
+            })
 
         except TimeoutException:
             results.append({
-                "Keyword": kw,
-                "Country": gl.upper(),
+                "Keyword": keyword,
+                "Country": country.upper(),
                 "URL": url,
                 "People Also Ask": "(timeout)",
                 "People Also Search For": "(timeout)",
@@ -196,21 +151,21 @@ if st.button("▶️  Start Extraction", type="primary", use_container_width=Tru
             })
         except Exception as e:
             results.append({
-                "Keyword": kw,
-                "Country": gl.upper(),
+                "Keyword": keyword,
+                "Country": country.upper(),
                 "URL": url,
-                "People Also Ask": f"(error: {str(e)[:70]})",
+                "People Also Ask": f"(error: {str(e)[:80]})",
                 "People Also Search For": "(error)",
                 "PAA count": 0,
                 "PASF count": 0
             })
 
-        # ── Live update ───────────────────────────────────────
-        df_live = pd.DataFrame(results)
-        live_table.dataframe(
-            df_live,
+        # Live table
+        df_results = pd.DataFrame(results)
+        table_placeholder.dataframe(
+            df_results,
             column_config={
-                "URL": st.column_config.LinkColumn("Google"),
+                "URL": st.column_config.LinkColumn("Google Search"),
                 "People Also Ask": st.column_config.TextColumn(width="large"),
                 "People Also Search For": st.column_config.TextColumn(width="large"),
             },
@@ -218,23 +173,19 @@ if st.button("▶️  Start Extraction", type="primary", use_container_width=Tru
             hide_index=True
         )
 
-        progress.progress((idx + 1) / total)
-
-        time.sleep(delay_seconds + random.uniform(-1.2, 2.8))
+        prog.progress((i + 1) / total)
+        time.sleep(delay + random.uniform(0, 2))
 
     driver.quit()
+    status.success("Done!")
+    prog.empty()
 
-    status.success("Extraction finished")
-    progress.empty()
-
-    # Final download
     st.download_button(
-        "⬇️ Download CSV",
-        df_live.to_csv(index=False).encode('utf-8'),
-        file_name="google_paa_pasf_results.csv",
-        mime="text/csv"
+        "Download CSV",
+        df_results.to_csv(index=False).encode('utf-8'),
+        "serp_results_strict_selectors.csv",
+        "text/csv"
     )
 
-else:
-    if uploaded is None:
-        st.info("Please upload a CSV or Excel file first.")
+st.divider()
+st.caption("Tool fixed to use ONLY your two selectors. If still mostly empty → Google no longer uses those classes in 2026.")
